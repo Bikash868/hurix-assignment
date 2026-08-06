@@ -146,32 +146,82 @@ async function main() {
 			RECONCILE_SQL
 		)
 
+		await execute(
+			conn,
+			`CREATE TABLE IF NOT EXISTS publications (
+			   bundle_id       VARCHAR PRIMARY KEY,
+			   artifact_count  BIGINT,
+			   total_bytes     BIGINT,
+			   descriptor      VARCHAR,
+			   request_token   VARCHAR,
+			   publication_id  VARCHAR,
+			   key_id          VARCHAR,
+			   status          VARCHAR
+			 )`
+		  );
+
 		// console.log(bundles);
 
-		const keyInfo = await getCurrentSigningKey();
+		let keyInfoPromise = null;
+		const getKeyInfo = () => (keyInfoPromise ??= getCurrentSigningKey());
 
 		const rows = []
 		for(const bundle of bundles) {
-			const descriptorObj = {
-				artifact_count: Number(bundle.artifact_count),
-				bundle_id: bundle.bundle_id,
-				total_bytes: Number(bundle.total_bytes),
-			}
-
-			const descriptor = canonicaljson(descriptorObj);
-
 			const bundleId = bundle.bundle_id
-			const requestToken = `token-${bundleId}`
 
-			const signature = signDescriptor(Buffer.from(descriptor, 'utf8'));
-			const response = await submitPublication(descriptor, signature, requestToken);
-
-			rows.push(`BUNDLE ${bundleId} SIGNED KEY=${keyInfo.key_id}`)
-
-			rows.push(
-				`BUNDLE ${bundleId} PUBLISHED RECEIPT=${response.publication_id} ` +
-				  `TOKEN=${requestToken} STATUS=${response.status}`
+			const existingRows = await queryAll(
+				conn,
+				`SELECT * FROM publications WHERE bundle_id = ?`,
+				bundleId
 			  );
+
+			let record;
+			if (existingRows.length > 0) {
+				record = existingRows[0];
+			} else {
+				const descriptorObj = {
+					artifact_count: Number(bundle.artifact_count),
+					bundle_id: bundleId,
+					total_bytes: Number(bundle.total_bytes),
+				}
+	
+				const descriptor = canonicaljson(descriptorObj);
+	
+				const requestToken = `token-${bundleId}`
+				
+				const signature = signDescriptor(Buffer.from(descriptor, 'utf8'));
+				const response = await submitPublication(descriptor, signature, requestToken);
+
+				const keyInfo = await getKeyInfo();
+
+				await execute(
+					conn,
+					`INSERT INTO publications VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+					bundleId,
+					descriptorObj.artifact_count,
+					descriptorObj.total_bytes,
+					descriptor,
+					requestToken,
+					response.publication_id,
+					keyInfo.key_id,
+					response.status
+				  );
+
+				record = {
+					bundle_id: bundleId,
+					request_token: requestToken,
+					publication_id: response.publication_id,
+					key_id: keyInfo.key_id,
+					status: response.status,
+				};
+	
+				}
+				rows.push(`BUNDLE ${record.bundle_id} SIGNED KEY=${record.key_id}`)
+	
+				rows.push(
+					`BUNDLE ${record.bundle_id} PUBLISHED RECEIPT=${record.publication_id} ` +
+					  `TOKEN=${record.request_token} STATUS=${record.status}`
+				  );
 		}
 		process.stdout.write(rows.join('\n') + '\n');
 
