@@ -79,7 +79,7 @@ function signDescriptor(descriptor) {
 	const descriptorFile = path.join(scratch, 'descriptor.bin');
 	const sigFile = path.join(scratch, 'sig.pem');
 	try {
-		fs.writeFileSync(descriptorFile, descriptorBytes);
+		fs.writeFileSync(descriptorFile, descriptor);
 		execFileSync(
 		  'openssl',
 		  [
@@ -108,7 +108,7 @@ async function getCurrentSigningKey() {
 	}
 
 	const key = res.json();
-	console.log("in getCurrentSigningKeycurrnet key:", key);
+	console.error("in getCurrentSigningKeycurrnet key:", key);
 	return key;
 }
 
@@ -126,7 +126,7 @@ async function submitPublication(descriptor, signature, requestToken) {
 		);
 	  }
 
-	  console.log("submit success:", response); // { publication_id, request_token, status }
+	  console.error("submit success:", response); // { publication_id, request_token, status }
 	  return response; 
 }
 
@@ -141,12 +141,40 @@ async function main() {
 			`CREATE OR REPLACE TABLE manifest AS SELECT * FROM read_csv_auto('${escapedPath}')`
 		)
 
-		const results = await queryAll(
+		const bundles = await queryAll(
 			conn,
 			RECONCILE_SQL
 		)
 
-		console.log(results);
+		// console.log(bundles);
+
+		const keyInfo = await getCurrentSigningKey();
+
+		const rows = []
+		for(const bundle of bundles) {
+			const descriptorObj = {
+				artifact_count: Number(bundle.artifact_count),
+				bundle_id: bundle.bundle_id,
+				total_bytes: Number(bundle.total_bytes),
+			}
+
+			const descriptor = canonicaljson(descriptorObj);
+
+			const bundleId = bundle.bundle_id
+			const requestToken = `token-${bundleId}`
+
+			const signature = signDescriptor(Buffer.from(descriptor, 'utf8'));
+			const response = await submitPublication(descriptor, signature, requestToken);
+
+			rows.push(`BUNDLE ${bundleId} SIGNED KEY=${keyInfo.key_id}`)
+
+			rows.push(
+				`BUNDLE ${bundleId} PUBLISHED RECEIPT=${response.publication_id} ` +
+				  `TOKEN=${requestToken} STATUS=${response.status}`
+			  );
+		}
+		process.stdout.write(rows.join('\n') + '\n');
+
 	} finally {
 		try {
 			conn.close();
