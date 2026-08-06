@@ -99,6 +99,37 @@ function signDescriptor(descriptor) {
 	  }
 }
 
+async function getCurrentSigningKey() {
+
+	const res = await fetch(`${GATEWAY_BASE_URL}/v1/signing-key/current`);
+
+	if(!res.ok) {
+		throw new Error(`Failed to get current signing key: ${res.status} ${res.statusText}`);
+	}
+
+	const key = res.json();
+	console.log("in getCurrentSigningKeycurrnet key:", key);
+	return key;
+}
+
+
+async function submitPublication(descriptor, signature, requestToken) {
+	const res = await fetch(`${GATEWAY_BASE_URL}/v1/publications`, {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify({ descriptor, signature, request_token: requestToken }),
+	  });
+	  const response = await res.json();
+	  if (!res.ok || response.error) {
+		throw new Error(
+		  `error submitting publication for ${requestToken}: ${response.error || res.status}`
+		);
+	  }
+
+	  console.log("submit success:", response); // { publication_id, request_token, status }
+	  return response; 
+}
+
 async function main() {
 	const db = await openDb(DB_PATH);
 	const conn = db.connect();
