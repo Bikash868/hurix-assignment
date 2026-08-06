@@ -19,23 +19,59 @@ function openDb(path) {
 
 function execute(conn, sql, ...params) {
 	return new Promise((resolve, reject) => {
-		conn.run(sql, params, (err, result) => (err ? reject(err) : resolve(result)));
+		conn.run(sql, ...params, (err, result) => (err ? reject(err) : resolve(result)));
 	});
 }
 
 
 function queryAll(conn, sql, ...params) {
 	return new Promise((resolve, reject) => {
-		conn.all(sql, params, (err, result) => (err ? reject(err) : resolve(result)));
+		conn.all(sql, ...params, (err, result) => (err ? reject(err) : resolve(result)));
 	});
 }
+
+const RECONCILE_SQL = `
+  WITH cte AS (
+    SELECT DISTINCT * FROM manifest
+  ),
+  withdrawn_ids AS (
+    SELECT DISTINCT supersedes_id AS entry_id
+    FROM cte
+    WHERE record_type = 'WITHDRAWAL'
+  ),
+  surviving_builds AS (
+    SELECT d.*
+    FROM cte d
+    WHERE d.record_type = 'BUILD'
+      AND NOT EXISTS (
+        SELECT 1 FROM withdrawn_ids w WHERE w.entry_id = d.entry_id
+      )
+  )
+  SELECT bundle_id,
+         COUNT(*) AS artifact_count,
+         SUM(size_bytes) AS total_bytes
+  FROM surviving_builds
+  GROUP BY bundle_id
+  ORDER BY bundle_id;
+`
 
 async function main() {
 	const db = await openDb(DB_PATH);
 	const conn = db.connect();
 
 	try {
-		console.error('db opened at:', DB_PATH);
+		const escapedPath = MANIFEST_FILE.replace(/'/g, "''");
+		await execute(
+			conn,
+			`CREATE OR REPLACE TABLE manifest AS SELECT * FROM read_csv_auto('${escapedPath}')`
+		)
+
+		const results = await queryAll(
+			conn,
+			RECONCILE_SQL
+		)
+
+		console.log(results);
 	} finally {
 		try {
 			conn.close();
