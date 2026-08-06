@@ -1,6 +1,9 @@
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import duckdb from 'duckdb';
+import fs from 'node:fs';
+import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.resolve(__dirname, '..');
@@ -54,6 +57,47 @@ const RECONCILE_SQL = `
   GROUP BY bundle_id
   ORDER BY bundle_id;
 `
+
+
+function canonicaljson(value) {
+	if(Array.isArray(value)) {
+		return '['+ value.map(canonicaljson).join(',') + ']';
+	} else if(typeof value === 'object' && value !== null) {
+		const values = Object.keys(value)
+			.sort()
+			.map(k => JSON.stringify(k) + ':' + canonicaljson(value[k]));
+
+		return '{'+ values.join(',') + '}';
+	}
+
+	return JSON.stringify(value);
+}
+
+
+function signDescriptor(descriptor) {
+	const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'sign-'));
+	const descriptorFile = path.join(scratch, 'descriptor.bin');
+	const sigFile = path.join(scratch, 'sig.pem');
+	try {
+		fs.writeFileSync(descriptorFile, descriptorBytes);
+		execFileSync(
+		  'openssl',
+		  [
+			'cms', '-sign',
+			'-in', descriptorFile,
+			'-signer', CURRENT_CERT_PATH,
+			'-inkey', CURRENT_KEY_PATH,
+			'-outform', 'PEM',
+			'-binary',
+			'-out', sigFile,
+		  ],
+		  { stdio: ['ignore', 'ignore', 'pipe'] }
+		);
+		return fs.readFileSync(sigFile, 'utf8');
+	  } finally {
+		fs.rmSync(scratch, { recursive: true, force: true });
+	  }
+}
 
 async function main() {
 	const db = await openDb(DB_PATH);
